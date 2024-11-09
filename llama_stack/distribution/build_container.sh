@@ -37,8 +37,34 @@ REPO_DIR=$(dirname $(dirname "$SCRIPT_DIR"))
 DOCKER_BINARY=${DOCKER_BINARY:-docker}
 DOCKER_OPTS=${DOCKER_OPTS:-}
 REPO_CONFIGS_DIR="$REPO_DIR/tmp/configs"
+EXTRA_PACKAGES=${EXTRA_PACKAGES:-}
+EXTRA_CONFIG=${EXTRA_CONFIG:-}
+PYTHON_CMD=${PYTHON_CMD:-python}
 
 TEMP_DIR=$(mktemp -d)
+
+# If this is a UBI image, set it up for dnf. Otherwise set it up for apt.
+echo "Using $docker_base for the base image"
+if [[ "$docker_base" == *ubi9* || "$docker_base" == *ubi1* ]]; then
+	if [[ "$docker_base" == *minimal* ]]; then
+		DNF_TOOL="microdnf"
+	else
+		DNF_TOOL="dnf"
+	fi
+	package_install="$DNF_TOOL -y install dnf && dnf -y update && dnf -y install --skip-broken"
+	package_cleanup="       dnf clean all"
+else
+	package_install="apt-get update && apt-get install -y"
+	package_cleanup="       rm -rf /var/lib/apt/lists/*"
+fi
+packages=" \
+       iputils-ping net-tools iproute2 dnsutils telnet \
+       curl wget telnet \
+       procps psmisc lsof \
+       traceroute \
+       bubblewrap \
+       $EXTRA_PACKAGES \
+       && "
 
 add_to_docker() {
   local input
@@ -55,13 +81,7 @@ add_to_docker <<EOF
 FROM $docker_base
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-       iputils-ping net-tools iproute2 dnsutils telnet \
-       curl wget telnet \
-       procps psmisc lsof \
-       traceroute \
-       bubblewrap \
-       && rm -rf /var/lib/apt/lists/*
+RUN $package_install $packages $package_cleanup
 
 EOF
 
@@ -106,12 +126,16 @@ if [ -n "$special_pip_deps" ]; then
   done
 fi
 
+if [ -n "$EXTRA_CONFIG" ] ; then
+	add_to_docker "$EXTRA_CONFIG"
+fi
+
 add_to_docker <<EOF
 
 # This would be good in production but for debugging flexibility lets not add it right now
 # We need a more solid production ready entrypoint.sh anyway
 #
-ENTRYPOINT ["python", "-m", "llama_stack.distribution.server.server"]
+ENTRYPOINT ["$PYTHON_CMD", "-m", "llama_stack.distribution.server.server"]
 
 EOF
 
